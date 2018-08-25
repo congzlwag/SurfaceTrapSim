@@ -1,45 +1,36 @@
 from __future__ import print_function
-# import struct
 import numpy as np
 import numdifftools as nd
-# import pdb
-# import pickle
-# import cPickle as pickle #Instead for python 2
-import h5py
-from hdf5storage import loadmat, savemat
 from scipy.optimize import minimize, minimize_scalar
 from scipy.linalg import eigh, inv, norm
-from scipy.interpolate import Akima1DInterpolator, RectBivariateSpline
+from scipy.constants import e as qe # Charge of electron in Coulomb
 from matplotlib import pyplot as plt
 # import csv
 from tqdm import tqdm
 from time import clock
 import sys
 
-from electrode import RRPESElectrode, Electrode
-# from multipole_expansion import MultipoleExpander
-
 class World:
 	'''
 	A General, Brand New World in SI-Unit
 	Axis convention in consistance with class:Electrode
-		x: perpendicular to the trap axis and parallel to the surface trap
-		y: perpendicular to the surface trap
 		z: axial
+	It doesn't matter whether z is parallel or vertical to the surface
 	attributes:
 		__scale:: the typical length in meter. Length unit in the code is self.scale meter(s)
 		dc_electrode_list:: a list of (name, electrode) s of dc electrodes
 		rf_electrode_list:: a list of (name, electrode) s of rf electrodes
 	'''
-	qe = 1.602176487e-19 # Charge of electron in Coulomb
+	# qe = 1.602176487e-19 
 	amu = 1.66054e-27    # Atomic Mass Unit in kg
 	def __init__(self, ionA, omega_rf, scale=1):
+		self.electrode_dict = {}
 		self.rf_electrode_list = []
 		self.dc_electrode_list = []
 		self.omega_rf = omega_rf
 		self.m = ionA * World.amu
 		self.__scale = scale
-		self._pseudopot_factor = World.qe**2/(4*self.m*(omega_rf*self.__scale)**2)
+		self._pseudopot_factor = qe**2/(4*self.m*(omega_rf*self.__scale)**2)
 		self.bounds = None # if no boundary, then None
 
 	def add_electrode(self, e, name, kind, volt):
@@ -49,6 +40,7 @@ class World:
 		as well as to the general electrode dict
 		"""
 		e.volt = volt
+		self.electrode_dict[name] = (kind, e)
 		if kind=='dc':
 			self.dc_electrode_list.append((name,e))
 		if kind=='rf':

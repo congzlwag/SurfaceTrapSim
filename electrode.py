@@ -2,10 +2,6 @@ from __future__ import print_function
 from scipy.interpolate import Akima1DInterpolator, RegularGridInterpolator
 from scipy.linalg import norm
 import numpy as np
-import sys
-# import pickle
-# import numdifftools as nd
-# import tqdm
 
 class Electrode:
 	"""
@@ -19,12 +15,10 @@ class Electrode:
 			hasattr(e,'pot') and hasattr(e,'grad') and hasattr(e,'hessian')
 		volt: voltage on this (set of) electrode(s)
 		_expand_pos: coordinates of the expanding position
-		taylor_dict: coefficients in the taylor expansion at expand_pos
+		_taylor_dict: coefficients in the taylor expansion at expand_pos
 	
 	Conventions:
 		Axes convention
-			x: perpendicular to the trap axis and parallel to the surface trap
-			y: perpendicular to the surface trap
 			z: axial
 		Multipole convention
 			Da: Da An's convention, used in cct
@@ -83,75 +77,75 @@ class Electrode:
 		Numerically expand the potential due to the electrode to second order as a taylor series
 		around the obersvation point r = [x, y, z]
 
-		self.taylor_dict is a dictionary containing the terms of the expansion. e.g.
-		self.taylor_dict['x^2'] = (1/2)d^2\phi/dx^2
+		self._taylor_dict is a dictionary containing the terms of the expansion. e.g.
+		self._taylor_dict['x^2'] = (1/2)d^2\phi/dx^2
 		"""
-		if hasattr(self,"taylor_dict") and hasattr(self, '_expand_pos') and np.allclose(self._expand_pos,r,1e-10):
+		if hasattr(self,"_taylor_dict") and hasattr(self, '_expand_pos') and np.allclose(self._expand_pos,r,1e-10):
 			return
 
-		# Otherwise we need to gather the taylor_dict for this NEW position
+		# Otherwise we need to gather the _taylor_dict for this NEW position
 		# Clear out multipole_dict
 		self.multipole_dict = {}
 		# Gather
 		self._expand_pos = r
-		self.taylor_dict = {}
-		self.taylor_dict['C'] = self.pot(r)
-		self.taylor_dict['x'], self.taylor_dict['y'], self.taylor_dict['z'] = self.grad(r)
+		self._taylor_dict = {}
+		self._taylor_dict['C'] = self.pot(r)
+		self._taylor_dict['x'], self._taylor_dict['y'], self._taylor_dict['z'] = self.grad(r)
 		# second derivatives
 		hessian = self.hessian(r)
 		if Electrode.multipole_convention=="Da":
-			self.taylor_dict['x^2'] = 0.25*hessian[0,0]
-			self.taylor_dict['y^2'] = 0.25*hessian[1,1]
-			self.taylor_dict['z^2'] = 0.25*hessian[2,2]
-			self.taylor_dict['xy'] = 0.25*hessian[0,1]
-			self.taylor_dict['xz'] = 0.25*hessian[0,2]
-			self.taylor_dict['zy'] = 0.25*hessian[1,2]
+			self._taylor_dict['x^2'] = 0.25*hessian[0,0]
+			self._taylor_dict['y^2'] = 0.25*hessian[1,1]
+			self._taylor_dict['z^2'] = 0.25*hessian[2,2]
+			self._taylor_dict['xy'] = 0.25*hessian[0,1]
+			self._taylor_dict['xz'] = 0.25*hessian[0,2]
+			self._taylor_dict['zy'] = 0.25*hessian[1,2]
 		elif Electrode.multipole_convention=="Littich":
-			self.taylor_dict['x^2'] = 0.5*hessian[0,0]
-			self.taylor_dict['y^2'] = 0.5*hessian[1,1]
-			self.taylor_dict['z^2'] = 0.5*hessian[2,2]
-			self.taylor_dict['xy'] = hessian[0,1]
-			self.taylor_dict['xz'] = hessian[0,2]
-			self.taylor_dict['zy'] = hessian[1,2]
+			self._taylor_dict['x^2'] = 0.5*hessian[0,0]
+			self._taylor_dict['y^2'] = 0.5*hessian[1,1]
+			self._taylor_dict['z^2'] = 0.5*hessian[2,2]
+			self._taylor_dict['xy'] = hessian[0,1]
+			self._taylor_dict['xz'] = hessian[0,2]
+			self._taylor_dict['zy'] = hessian[1,2]
 
 		# # higher order stuff
-		# self.taylor_dict['z^3'], self.taylor_dict['xz^2'], self.taylor_dict['yz^2'] = self.third_order_derivatives(r)
-		# self.taylor_dict['z^4'], self.taylor_dict['x^2z^2'], self.taylor_dict['y^2z^2'] = self.fourth_order_derivatives(r)
+		# self._taylor_dict['z^3'], self._taylor_dict['xz^2'], self._taylor_dict['yz^2'] = self.third_order_derivatives(r)
+		# self._taylor_dict['z^4'], self._taylor_dict['x^2z^2'], self._taylor_dict['y^2z^2'] = self.fourth_order_derivatives(r)
 
 	def get_multipole(self, multipole, r0=1):
 		if Electrode.multipole_convention=='Da':
 			if multipole=='U1':
-				return 0.5*(r0**2)*(self.taylor_dict['x^2'] - self.taylor_dict['y^2'])
+				return 0.5*(r0**2)*(self._taylor_dict['x^2'] - self._taylor_dict['y^2'])
 			if multipole=='U2':
-				return 0.5*(r0**2)*(2 * self.taylor_dict['z^2'] - self.taylor_dict['x^2'] - self.taylor_dict['y^2'])
+				return 0.5*(r0**2)*(2 * self._taylor_dict['z^2'] - self._taylor_dict['x^2'] - self._taylor_dict['y^2'])
 			if multipole=='U3':
-				return (r0**2)*self.taylor_dict['xy']
+				return (r0**2)*self._taylor_dict['xy']
 			if multipole=='U4':
-				return (r0**2)*self.taylor_dict['zy']
+				return (r0**2)*self._taylor_dict['zy']
 			if multipole=='U5':
-				return (r0**2)*self.taylor_dict['xz']
+				return (r0**2)*self._taylor_dict['xz']
 		elif Electrode.multipole_convention=='Littich':
 			if multipole=='U1':
-				return (r0**2)*(self.taylor_dict['x^2'] - self.taylor_dict['y^2'])
+				return (r0**2)*(self._taylor_dict['x^2'] - self._taylor_dict['y^2'])
 			if multipole=='U2':
-				return (r0**2)*(self.taylor_dict['z^2'])
+				return (r0**2)*(self._taylor_dict['z^2'])
 			if multipole=='U3':
-				return 2*(r0**2)*self.taylor_dict['xy']
+				return 2*(r0**2)*self._taylor_dict['xy']
 			if multipole=='U4':
-				return 2*(r0**2)*self.taylor_dict['zy']
+				return 2*(r0**2)*self._taylor_dict['zy']
 			if multipole=='U5':
-				return 2*(r0**2)*self.taylor_dict['xz']
+				return 2*(r0**2)*self._taylor_dict['xz']
 
 		# fields
 		if multipole=='Ex':
-			return -1*r0*self.taylor_dict['x']
+			return -1*r0*self._taylor_dict['x']
 		if multipole=='Ey':
-			return -1*r0*self.taylor_dict['y']
+			return -1*r0*self._taylor_dict['y']
 		if multipole=='Ez':
-			return -1*r0*self.taylor_dict['z']
+			return -1*r0*self._taylor_dict['z']
 
 		if multipole=='C':
-			return self.taylor_dict['C']
+			return self._taylor_dict['C']
 
 	def expand_in_multipoles(self, r, controlled_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], r0=1):
 		"""
@@ -167,21 +161,28 @@ class Electrode:
 		
 		# # stuff that isn't really multipoles
 
-		# self.multipole_dict['z^2'] = (r0)**2*2*self.taylor_dict['z^2']
+		# self.multipole_dict['z^2'] = (r0)**2*2*self._taylor_dict['z^2']
 
-		# self.multipole_dict['z^4'] = (r0)**4*self.taylor_dict['z^4']/24.
-		# self.multipole_dict['xz^2'] = (r0)**3 * self.taylor_dict['xz^2']
-		# self.multipole_dict['yz^2'] = (r0)**3 * self.taylor_dict['yz^2']
+		# self.multipole_dict['z^4'] = (r0)**4*self._taylor_dict['z^4']/24.
+		# self.multipole_dict['xz^2'] = (r0)**3 * self._taylor_dict['xz^2']
+		# self.multipole_dict['yz^2'] = (r0)**3 * self._taylor_dict['yz^2']
 
 		# #These terms give corrections to (radial frequency)**2 along the z axis:
-		# self.multipole_dict['x^2z^2']  =  (r0)**4 * self.taylor_dict['x^2z^2']
-		# self.multipole_dict['y^2z^2']  =  (r0)**4 * self.taylor_dict['y^2z^2']
+		# self.multipole_dict['x^2z^2']  =  (r0)**4 * self._taylor_dict['x^2z^2']
+		# self.multipole_dict['y^2z^2']  =  (r0)**4 * self._taylor_dict['y^2z^2']
 
 	def get_expand_pos(self):
 		return self._expand_pos
 
-	def extend(self, new_elec):
-		self._sub_electrodes.append(new_elec)
+	def extend(self, new_elecs=None, klass=None, **kwargs):
+		if new_elecs is not None:
+			for new_elec in new_elecs:
+				self._sub_electrodes.append(new_elec)
+			return
+		if klass is None:
+			print("Nothing to extend")
+			return
+		self._sub_electrodes.append(klass(**kwargs))
 
 	def get_region_bounds(self):
 		lbs = []
@@ -195,12 +196,12 @@ class Electrode:
 			ubs = np.min(np.asarray(ubs),0)
 			return lbs, ubs
 
-	def output_hessdata(self):
-		return self._e.output_hessdata()
+	def get_baseE(self):
+		return [self._e] + self._sub_electrodes
 
 class RRPESElectrode:
 	"""
-	PESElectrode: Rectangular Region Poisson Equation Solved Electrode
+	RRPESElectrode: Rectangular Region Poisson Equation Solved Electrode
 	
 	Attributes:
 		gvec: grid vectors
@@ -311,11 +312,7 @@ class RRPESElectrode:
 		return self._interpolant(pos)
 
 	def grad(self, pos):
-		# try:
 		return np.asarray([gi(pos) for gi in self._grad_interpolants]).ravel()
-		# except ValueError:
-		# 	print(pos,[self.gvec[l][[0,-1]] for l in range(3)])
-		# 	sys.exit()
 
 	def hessian(self, pos):
 		hess = np.empty((3,3),dtype='d')
@@ -334,28 +331,26 @@ class RRPESElectrode:
 	def output_hessdata(self):
 		return self._hess_data
 
-class SqElectrode:
+class RectElectrode:
 	"""
-	SqElectrode: Squares-shaped Electrode
+	RectElectrode: Rectangular-shaped Electrode
+
+	About Axis:
+		Since it will be wrapped in class:Electrode, the third component of input coordinates must be the axial one
+		This is determined by `derivatives at the construction of this instance
+
+	Constructing Parameters:
+		location   : a 2-element list of the form [ (xmin, xmax), (ymin, ymax) ]
+		derivatives: a dictionary whose keys at least include 'phi0', 'ddx', 'ddy', 'ddz', 'd2dx2', 'd2dz2', 'd2dxdy', 'd2dxdz', 'd2dydz'
 	"""
 	def __init__(self, location, derivatives):
 		"""
-		location is a 2-element list of the form
-		[ (xmin, xmax), (ymin, ymax) ]
-
-		axes_permutation is an integer.
-		0 (default): normal surface trap. z-axis lies along the plane
-		of the trap
-		1: trap is in the x-y plane. z axis is vertical
 		"""
-
 		xmin, xmax = sorted(location[0])
 		ymin, ymax = sorted(location[1])
 
 		(self.x1, self.y1) = (xmin, ymin)
 		(self.x2, self.y2) = (xmax, ymax)
-
-		self.multipole_expansion_dict = {} # keys are expansion points. elements are dictionaries of multipole expansions
 
 		self.derivatives = derivatives
 
@@ -380,7 +375,7 @@ class SqElectrode:
 		x, y, z = r
 		keys = ['ddx', 'ddy', 'ddz']
 		grad = np.array([self.derivatives[key](self.x1, self.x2, self.y1, self.y2, x, y, z)
-						 for key in kforbiddeneys]) / (2*np.pi)
+						 for key in keys]) / (2*np.pi)
 		return grad
 
 	def hessian(self, r):
