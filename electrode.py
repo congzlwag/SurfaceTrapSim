@@ -1,7 +1,9 @@
 from __future__ import print_function
+import numpy as np
 from scipy.interpolate import Akima1DInterpolator, RegularGridInterpolator
 from scipy.linalg import norm
-import numpy as np
+
+__all__ = ["Electrode", "RRPESElectrode", "RectElectrode"]
 
 class Electrode:
 	"""
@@ -216,6 +218,8 @@ class RRPESElectrode:
 		a. Replace the RegularGridInterpolator method here
 		b. Translate the functions in interp_diff.m to this class
 	"""
+	lap_tol = 0.1
+	# Tolerance in nonzero laplacian. Unit [V]/[L]^2, [L] is the length unit of this electrode
 	def __init__(self, gvec, pot_data, grad_data=None, hess_data=None):
 		self.gvec = gvec
 		self._data = pot_data
@@ -269,19 +273,18 @@ class RRPESElectrode:
 			for j in range(i+1,3):
 				self._hess_data[(i,j)] = 0.5*(hess_data[i,j]+hess_data[j,i])
 
-	def check_laplace(self, trace_free=True, tol=0.1):
+	def check_laplace(self, trace_free=True):
 		"""
 		Checking if self._hess_data satisfies laplace equation
 		parameters:
 			trace_free:: Whether to fix the hessian diagonals to satisfy Laplace eq. or not. 
 				If trace_free, self._hess_data would be automatically trace-free
-			tol:: Tolerance in nonzero laplacian. Unit [V]/[L]^2, [L] is the length unit of this electrode
 		"""
 		laplace = np.asarray([self._hess_data[(i,i)] for i in range(3)]).sum(axis=0)
-		nbad = (laplace > tol).sum()
+		nbad = (laplace > RRPESElectrode.lap_tol).sum()
 		if nbad > 0:
 			laplace_ = laplace[1:-1,1:-1,1:-1]
-			nbad_ = (laplace_ > tol).sum()
+			nbad_ = (laplace_ > RRPESElectrode.lap_tol).sum()
 			print("Laplace eq. check: totally %d bad points, %d inside the bulk."%(nbad, nbad_))
 			# print("Largest residue is", abs(laplace).max(),". Mean(abs) =",abs(laplace).mean())
 			# print("Chopping off the boundaries,","Largest residue is", abs(laplace_).max(),". Mean(abs) =",abs(laplace_).mean())
@@ -289,13 +292,13 @@ class RRPESElectrode:
 				laplace /= 3.
 				for i in range(3):
 					self._hess_data[(i,i)] -= laplace
-			return (nbad, nbad_)
-		else:
-			return (0,0)
+		return laplace > RRPESElectrode.lap_tol
 
 	def interpolate(self):
 		"""
 		Interpolate the grid data
+		scipy.interpolate.RegularGridInterpolator interpolates on a regular grid in arbitrary dimensions. 
+			The grid spacing however may be uneven
 		Future dev: Should either 3D Akima or 3D spline be developed, replace the RegularGridInterpolator method here
 		"""
 		# bounds_error=False, fill_value=None enables extrapolation

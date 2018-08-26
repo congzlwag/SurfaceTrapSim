@@ -5,10 +5,7 @@ from scipy.optimize import minimize, minimize_scalar
 from scipy.linalg import eigh, inv, norm
 from scipy.constants import e as qe # Charge of electron in Coulomb
 from matplotlib import pyplot as plt
-# import csv
 from tqdm import tqdm
-from time import clock
-import sys
 
 class World:
 	'''
@@ -71,11 +68,7 @@ class World:
 		"""
 		E = np.zeros((3))
 		for nam, e in self.rf_electrode_list:
-			try:
-				E += e.compute_electric_field(r)
-			except ValueError:
-				print(e.compute_electric_field(r))
-				sys.exit()
+			E += e.compute_electric_field(r)
 		return E
 
 	def check_bound(self):
