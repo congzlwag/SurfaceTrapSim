@@ -7,27 +7,43 @@ from scipy.constants import e as qe # Charge of electron in Coulomb
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
+from .SH import funcSHexp
+
 class World:
 	'''
-	A General, Brand New World in SI-Unit
-	Axis convention in consistance with class:Electrode
-		z: axial
-	It doesn't matter whether z is parallel or vertical to the surface
-	attributes:
-		__scale:: the typical length in meter. Length unit in the code is self.scale meter(s)
-		dc_electrode_list:: a list of (name, electrode) s of dc electrodes
-		rf_electrode_list:: a list of (name, electrode) s of rf electrodes
+A General, Brand New World in SI-Unit
+
+Axis convention in consistance with <class Electrode>
+	z: axial
+	* It doesn't matter whether z is parallel or vertical to the surface or not
+
+Attributes:
+	__scale	:: the typical length in meter. Length unit in the code is self.__scale meter(s)
+	omega_rf:: the RF ANGULAR frequency
+	m 		:: the mass a single ion
+	bounds 	:: the boundaies of this world
+	dc_electrode_list	:: a list of (name, electrode) s of dc electrodes
+	rf_electrode_list	:: a list of (name, electrode) s of rf electrodes
+	electrode_dict		:: dictionary that electrode_dict[name] = ("dc" or "rf", electrode)
+	_pseudopot_factor	:: the factor in front of the pseudopotential
+
+Methods:
 	'''
-	# qe = 1.602176487e-19 
 	amu = 1.66054e-27    # Atomic Mass Unit in kg
 	def __init__(self, ionA, omega_rf, scale=1):
+		"""
+__init__(self, ionA, omega_rf, scale=1):
+	ionA:		mass number of the ion
+	omega_rf: 	the RF ANGULAR frequency
+	scale	: 	the typical length in meter. Length unit in the code is self.__scale meter(s)
+		"""
 		self.electrode_dict = {}
 		self.rf_electrode_list = []
 		self.dc_electrode_list = []
 		self.omega_rf = omega_rf
 		self.m = ionA * World.amu
 		self.__scale = scale
-		self._pseudopot_factor = qe**2/(4*self.m*(omega_rf*self.__scale)**2)
+		self._pseudopot_factor = qe**2/(4*self.m*(omega_rf**2))/(scale**2)
 		self.bounds = None # if no boundary, then None
 
 	def add_electrode(self, e, name, kind, volt):
@@ -109,7 +125,7 @@ class World:
 			else:
 				print("@ z=%.3fmm Optimization Failed:"%z, ym.message, '. Returning initial value')
 				ymy = xy0[1]
-				yi = np.linspace(yi[0],yi[-1],30)
+				yi = np.linspace(bounds[1,0],bounds[1,1],30)
 				plt.plot(yi, [fo(yy) for yy in yi], label="%.3f"%z)
 				plt.xlabel("y/mm")
 				plt.ylabel(r"$E_{RF}^2/\mathrm{(V^2mm^{-2})}$")
@@ -136,15 +152,22 @@ class World:
 		"""pseudopotential in Joule"""
 		return self._pseudopot_factor*sum(self.compute_rf_field(r)**2)
 
+	def compute_pseudopot_hessian_atNULL(self, r):
+		"""This only valid when r is a RF null!"""
+		hess = np.zeros((3,3))
+		for nm, e in self.rf_electrode_list:
+			hess += e.compute_hessian(r)
+		return 2*self._pseudopot_factor*(np.dot(hess, hess.T))
+
 	def compute_pseudopot_frequencies(self, r):
 		'''
-		This is only valid if xp, yp, zp is the trapping position. Return frequency (i.e. 2*pi*omega)
+		This is only valid if xp, yp, zp is the trapping position. Return frequency (i.e. omega/(2*pi))
 		'''
 		hessdiag = nd.Hessdiag(self.compute_pseudopot,step=1e-6)(r)/(self.__scale**2)
 		'''
 		Now d2Udx2 has units of J/m^2. Then w = sqrt(d2Udx2/(mass)) has units of angular frequency
 		'''
-		return np.sqrt(abs(hessdiag)/self.m)/(2*np.pi)
+		return np.sqrt(qe*abs(hessdiag)/self.m)/(2*np.pi), hessdiag>0
 
 	def compute_dc_potential_frequencies(self, r):
 		'''
@@ -163,10 +186,10 @@ class World:
 		# fx = np.sqrt(abs(d2Udx2)/m)/(2*np.pi)
 		# fy = np.sqrt(abs(d2Udy2)/m)/(2*np.pi)
 		# fz = np.sqrt(abs(d2Udz2)/m)/(2*np.pi)
-		return np.sqrt(abs(hessdiag)/self.m)/(2*np.pi), eigvec
+		return np.sqrt(qe*abs(hessdiag)/self.m)/(2*np.pi), eigvec, hessdiag>0
 
 	def compute_full_potential(self, r):
-		return self.compute_pseudopot(r) + self.compute_total_dc_potential(r)
+		return self.compute_pseudopot(r) + self.compute_dc_potential(r)
 
 	# def compute_full_potential_frequencies(self, r):
 	#   '''
@@ -192,35 +215,62 @@ class World:
 	#   fz = np.sqrt(abs(d2Udz2)/m)/(2*np.pi)
 	#   return [fx, fy, fz], eigvec
 
-	def construct_multipole_arr(self, position, ctrl_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], ctrl_electrodes='alldc', r0=1):
+	def local_multipole_arr(self, position, loc_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], ctrl_electrodes='alldc', r0=1):
 		"""
-		return: The matrix that maps DC voltages on `ctrl_electrodes to `ctrl_multipoles at `position
-				Its shape is (len(ctrl_multipoles), len(ctrl_electrodes))
+local_multipole_arr(self, position, loc_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], ctrl_electrodes='alldc', r0=1)
+Parameters:
+	position		:: a (3,) array indicating the position of interest
+	loc_multipoles	:: a list of multipoles that are of interest at this position
+	ctrl_electrodes :: a list of the INDICES of dc electrodes of interest
+	
+returns the matrix, shaped (len(loc_multipoles), len(ctrl_electrodes)), that maps DC voltages on `ctrl_electrodes to `loc_multipoles at `position
 		"""
-		self.ctrl_multipoles = ctrl_multipoles
+		self.loc_multipoles = loc_multipoles
 		if isinstance(ctrl_electrodes,str) and ctrl_electrodes=='alldc':
 			ctrl_electrodes = range(len(self.dc_electrode_list))
 
-		multipole_arr = np.empty((len(ctrl_multipoles), len(ctrl_electrodes)),'d')
+		multipole_arr = np.empty((len(loc_multipoles), len(ctrl_electrodes)),'d')
 		for i, j in enumerate(ctrl_electrodes):
 
 			nam, elec = self.dc_electrode_list[j]
-			elec.expand_in_multipoles(position, ctrl_multipoles, r0)
+			elec.expand_in_multipoles(position, loc_multipoles, r0)
 
-			multipole_arr[:,i] = [elec.multipole_dict[multipole] for multipole in ctrl_multipoles]
+			multipole_arr[:,i] = [elec.multipole_dict[multipole] for multipole in loc_multipoles]
 		return multipole_arr
 
-	def multipole_control_vdc_arr(self, position, ctrl_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], ctrl_electrodes = 'alldc', cost_Q='id', r0=1):
+	def multipole_control_vdc_arr(self, pos_ctrl_mults, ctrl_electrodes='alldc', cost_Q='id', r0=1):
 		"""
-		return: The matrix that controls voltages on `ctrl_electrodes in order for `ctrl_multipoles at `position.
-				Its shape is (len(self.dc_electrodes), len(ctrl_multipoles)) with those not multipole-ctrl electrodes padded with 0
+multipole_control_vdc_arr(self, pos_ctrl_mults, ctrl_electrodes='alldc', cost_Q='id', r0=1):
+Parameters:
+	position	:: a (3,) array indicating the position of interest
+	pos_ctrl_mults	:: a list of (position, list of controlled local multipoles) pairs or a single pair
+	ctrl_electrodes :: a list of the INDICES of dc electrodes to be multipole-controlled
+	costQ  		:: the positive definite matrix Q in the cost function
+
+return: The matrix, shaped (len(self.dc_electrodes), n_mult), controls DC voltages on ctrl_electrodes for pos_ctrl_mults.
+	n_mult = sum([len(pos_ctrl_mult[1]) for pos_ctrl_mult in pos_ctrl_mults])
+	Rows that correspond to electrodes that are not multipole-controlled are padded with 0
 		"""
 		alle = (isinstance(ctrl_electrodes,str) and ctrl_electrodes=='alldc')
 		if alle:
 			ctrl_electrodes = range(len(self.dc_electrode_list))
-		multipole_arr = self.construct_multipole_arr(position, ctrl_multipoles, ctrl_electrodes, r0)
-		
+
+		# Support inputing a single (position, list of controlled local multipoles) pair
+		if isinstance(pos_ctrl_mults, tuple) and len(pos_ctrl_mults)==2:
+			pos_ctrl_mults = [pos_ctrl_mults]
+
+		n_mult = sum([len(pos_ctrl_mult[1]) for pos_ctrl_mult in pos_ctrl_mults])
 		n_elec = len(ctrl_electrodes)
+		if n_mult > n_elec:
+			raise ValueError("Number of multipoles %d exceeds number of controlled electrodes %d"%(n_mult, n_elec))
+
+		multipole_arr = np.empty((n_mult, n_elec), 'd')
+
+		pt = 0
+		for pos, ctrl_mult in pos_ctrl_mults:
+			multipole_arr[pt:pt+len(ctrl_mult),:] = self.local_multipole_arr(pos, ctrl_mult, ctrl_electrodes, r0)
+			pt += len(ctrl_mult)
+
 		if isinstance(cost_Q,str) and cost_Q=='id':
 			cost_Q = np.identity(n_elec)
 		assert cost_Q.shape==(n_elec, n_elec)
@@ -235,11 +285,29 @@ class World:
 		if not alle: #padding
 			for i in range(len(self.dc_electrode_list)):
 				if not i in ctrl_electrodes:
-					voltage_arr = np.insert(voltage_arr, i, np.zeros(len(ctrl_multipoles)),axis=0)
+					voltage_arr = np.insert(voltage_arr, i, np.zeros(n_mult), axis=0)
 		return voltage_arr
 
-	# def calculate_multipoles(self, multipole_list):
-	# 	multipoles = {}
-	# 	for mult in multipole_list:      
-	# 		multipoles[mult] = sum([elec.multipole_dict[mult]*elec.volt for ky, elec in enumerate(self.electrode_dict)])            
-	# 	return multipoles
+	def set_volts(self, voltages, kind):
+		elist = self.dc_electrode_list if kind=='dc' else self.rf_electrode_list
+		assert len(voltages)==len(elist)
+		for i, nm_e in enumerate(elist):
+			nm_e[1].volt = voltages[i]
+
+	def fit_field_hess(self, pos, h_grid, n_grid=5, order=2):
+		if n_grid%2==0:
+			n_grid += 1
+		gi = h_grid*(np.arange(n_grid) - n_grid//2)
+		f, res = funcSHexp(self.compute_full_potential, pos, pos[0]+gi, pos[1]+gi, pos[2]+gi, 3)
+		print(res)
+		pot = f[0]
+		efield = np.array([f[2],f[3],-f[1]])
+		quad = np.array([6*f[7], f[4], 12*f[8], -6*f[6], -6*f[5]])
+		hess = np.empty((3,3),'d')
+		hess[0,0] = quad[0]-quad[1]
+		hess[1,1] = -quad[0]-quad[1]
+		hess[2,2] = 2*quad[1]
+		hess[0,1] = hess[1,0] = 0.5*quad[2]
+		hess[0,2] = hess[2,0] = 0.5*quad[4]
+		hess[1,2] = hess[2,1] = 0.5*quad[3]
+		return pot, efield, hess

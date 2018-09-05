@@ -7,27 +7,31 @@ __all__ = ["Electrode", "RRPESElectrode", "RectElectrode"]
 
 class Electrode:
 	"""
-	General Electrode, packing a basic electrode instance in order to
-		a. designate voltage
-		b. expand multipoles
-		c. unite different basic electrodes that share one terminal
-	
-	Attributes:
-		e: root basic electrode. Can be any basic electrode instance, as long as:
-			hasattr(e,'pot') and hasattr(e,'grad') and hasattr(e,'hessian')
-		volt: voltage on this (set of) electrode(s)
-		_expand_pos: coordinates of the expanding position
-		_taylor_dict: coefficients in the taylor expansion at expand_pos
-	
-	Conventions:
-		Axes convention
-			z: axial
-		Multipole convention
-			Da: Da An's convention, used in cct
-			Littich: Convention in Gebhard Littich thesis, p.39
+General Electrode, packing a basic electrode instance in order to
+	a. designate voltage
+	b. expand multipoles
+	c. unite different basic electrodes that share one terminal
 
+Conventions:
+	Axes convention
+		z: axial
+		* It doesn't matter whether z is parallel or vertical to the surface or not
+	Multipole convention
+		Da: Da An's convention, used in cct gapless
+		Littich: Convention in Gebhard Littich thesis, p.39
+
+Attributes:
+	e 	:: root basic electrode. Can be any basic electrode instance, as long as:
+		hasattr(e,'pot') and hasattr(e,'grad') and hasattr(e,'hessian')
+	volt:: voltage on this (set of) electrode(s)
+	_expand_pos		:: coordinates of the expanding position
+	_taylor_dict	:: coefficients in the taylor expansion at expand_pos
+	_sub_electrodes	:: a list that incorporates other sub eletrodes
+
+Methods:
+	pot, grad, hessian 	:: Sum over the pot, grad, hessian of the sub electrodes
 	"""
-	multipole_convention = 'Da'
+	multipole_convention = 'Littich'
 	def __init__(self, electrode, volt=0):
 		self._e = electrode
 		self.volt = volt
@@ -203,20 +207,23 @@ class Electrode:
 
 class RRPESElectrode:
 	"""
-	RRPESElectrode: Rectangular Region Poisson Equation Solved Electrode
-	
-	Attributes:
-		gvec: grid vectors
-		_data:
-		_grad_data:
-		_hess_data:
-		_interpolant:
-		_grad_interpolants:
-		_hess_interpolants:
+RRPESElectrode: Rectangular Region Poisson Equation Solved Electrode
 
-	For future Developer(s): If one day either 3D Akima or 3D spline is available in scipy.interpolate
-		a. Replace the RegularGridInterpolator method here
-		b. Translate the functions in interp_diff.m to this class
+Attributes:
+	lap_tol		:: [COMMON in this class] the Laplacian-tolerance Unit [V]/[L]^2, [L] is the length unit
+	gvec		:: grid vectors
+	_data 		:: gridded potential data of this electrode
+	_grad_data	:: gridded potential gradient data
+	_hess_data 	:: gridded potential hessian data
+	_interpolant 		:: interpolant of _data
+	_grad_interpolants	:: interpolants of grad_data
+	_hess_interpolants	:: interpolants of hess_data
+
+For future Developer(s): If one day either 3D Akima or 3D spline is available in scipy.interpolate
+	a. Replace the RegularGridInterpolator method here
+	b. Translate the functions in interp_diff.m to this class
+
+Methods
 	"""
 	lap_tol = 0.1
 	# Tolerance in nonzero laplacian. Unit [V]/[L]^2, [L] is the length unit of this electrode
@@ -257,6 +264,7 @@ class RRPESElectrode:
 
 	def finite_diff(self):
 		"""
+		Directly apply Finite central difference method to obtain the gradients and the hessian from gridded potential
 		"""
 		strides = np.asarray([w[1]-w[0] for w in self.gvec])
 		self._grad_data = np.gradient(self._data, *strides)
@@ -336,15 +344,15 @@ class RRPESElectrode:
 
 class RectElectrode:
 	"""
-	RectElectrode: Rectangular-shaped Electrode
+RectElectrode: Rectangular-shaped Electrode
 
-	About Axis:
-		Since it will be wrapped in class:Electrode, the third component of input coordinates must be the axial one
-		This is determined by `derivatives at the construction of this instance
+About Axis:
+	Since it will be wrapped in class:Electrode, the third component of input coordinates must be the axial one
+	This is determined by `derivatives at the construction of this instance
 
-	Constructing Parameters:
-		location   : a 2-element list of the form [ (xmin, xmax), (ymin, ymax) ]
-		derivatives: a dictionary whose keys at least include 'phi0', 'ddx', 'ddy', 'ddz', 'd2dx2', 'd2dz2', 'd2dxdy', 'd2dxdz', 'd2dydz'
+Constructing Parameters:
+	location   : a 2-element list of the form [ (xmin, xmax), (ymin, ymax) ]
+	derivatives: a dictionary whose keys at least include 'phi0', 'ddx', 'ddy', 'ddz', 'd2dx2', 'd2dz2', 'd2dxdy', 'd2dxdz', 'd2dydz'
 	"""
 	def __init__(self, location, derivatives):
 		"""
