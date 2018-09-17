@@ -2,8 +2,17 @@ from __future__ import print_function
 import numpy as np
 from scipy.interpolate import Akima1DInterpolator, RegularGridInterpolator
 from scipy.linalg import norm
+from .utils import intersectBounds, segNeighbor, quadru2hess
+from .SH import gridSHexp
 
-__all__ = ["Electrode", "RRPESElectrode", "RectElectrode"]
+__all__ = ["Electrode", "RRPESElectrodeSH", "RectElectrode"]
+
+multipole_convention = 'Littich'
+"""
+Multipole convention
+	Da: Da An's convention, used in cct gapless
+	Littich: Convention in Gebhard Littich thesis, p.39
+"""
 
 class Electrode:
 	"""
@@ -16,13 +25,10 @@ Conventions:
 	Axes convention
 		z: axial
 		* It doesn't matter whether z is parallel or vertical to the surface or not
-	Multipole convention
-		Da: Da An's convention, used in cct gapless
-		Littich: Convention in Gebhard Littich thesis, p.39
 
 Attributes:
 	e 	:: root basic electrode. Can be any basic electrode instance, as long as:
-		hasattr(e,'pot') and hasattr(e,'grad') and hasattr(e,'hessian')
+		hasattr(e,'pot') and hasattr(e,'grad') and hasattr(e,'hessian') and hasattr(e,'expand_potential')
 	volt:: voltage on this (set of) electrode(s)
 	_expand_pos		:: coordinates of the expanding position
 	_taylor_dict	:: coefficients in the taylor expansion at expand_pos
@@ -31,11 +37,12 @@ Attributes:
 Methods:
 	pot, grad, hessian 	:: Sum over the pot, grad, hessian of the sub electrodes
 	"""
-	multipole_convention = 'Littich'
+
 	def __init__(self, electrode, volt=0):
 		self._e = electrode
 		self.volt = volt
 		self._sub_electrodes = []
+		self._expand_pos = None
 
 	def pot(self, r):
 		res = self._e.pot(r)
@@ -59,24 +66,68 @@ Methods:
 		return self.volt*self.pot(r)
 
 	def compute_electric_field(self, r):
-		'''
-		Calculate the electric field at the observation point, given the voltage on the electrode
-		If voltage is set in Volts, field is in Volts/meter.
-		E = -grad(Potential)
-		'''
 		return -(self.volt)*self.grad(r)
 
 	def compute_hessian(self, r):
 		return self.volt*self.hessian(r)
 
 	def compute_d_effective(self, r):
-		'''
-		Calculate the effective distance due to this electrode. This is defined
-		as the parallel plate capacitor separation which gives the observed electric
-		field for the given applied voltage. That is,
-		Deff = V/E. Will be different in each direction so we return [deff_x, deff_y, deff_z]
-		'''
-		return 1/norm(self.grad(r)) # in meters
+		return 1/norm(self.grad(r))
+
+	def expand_in_multipoles(self, r, controlled_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], r0=1):
+		"""
+		Obtain the multipole expansion for the potential due to the electrode at the observation point.
+		Note that U1,U2 have a 2x functional form compared to U3,U4,U5 to equalize curvature
+		"""
+		# Check if r is the position of expansion last time
+		if self._expand_pos is None or not np.allclose(self._expand_pos, r, 1e-10):
+			self.multipole_dict = {} # clean up
+		# print(prePos, hasattr(self,'multipole_dict'))
+		self._expand_pos = r
+
+		self._e.expand_potential(r) # when implementing expand_potential, firstly check if r is the expanding position last time
+		for e in self._sub_electrodes:
+			e.expand_potential(r)
+
+		for cm in controlled_multipoles:
+			if not cm in self.multipole_dict.keys():
+				self.multipole_dict[cm] = self._e.get_multipole(cm, r0)
+				for e in self._sub_electrodes:
+					self.multipole_dict[cm] += e.get_multipole(cm, r0)
+
+	def extend(self, new_elecs=None, klass=None, **kwargs):
+		"""
+Extend an Electrode instance in two ways:
+	A. Providing new_elecs that hasattr(new_elecs,'pot') and hasattr(new_elecs,'grad') and hasattr(new_elecs,'hessian') and hasattr(new_elecs,'expand_potential')
+	B. Providing a class and the corresponding initializing parameters in **kwargs
+		"""
+		if new_elecs is not None:
+			for new_elec in new_elecs:
+				self._sub_electrodes.append(new_elec)
+			return
+		if klass is None:
+			print("Nothing to extend")
+			return
+		self._sub_electrodes.append(klass(**kwargs))
+
+	def get_region_bounds(self):
+		return intersectBounds([elec.bounds() for elec in [self._e]+self._sub_electrodes])
+
+	def get_baseE(self):
+		"""
+return a list of all the subelectrodes in this electrode
+		"""
+		return [self._e] + self._sub_electrodes
+
+class Base:
+	"""
+Base electrode class. DON'T use outside of the submodule electrode.
+Unnecessary to have attribute multipole_dict, for class Electrode has
+	"""
+	_expand_pos = None
+
+	def bounds(self):
+		return None
 
 	def expand_potential(self, r):
 		"""
@@ -86,7 +137,7 @@ Methods:
 		self._taylor_dict is a dictionary containing the terms of the expansion. e.g.
 		self._taylor_dict['x^2'] = (1/2)d^2\phi/dx^2
 		"""
-		if hasattr(self,"_taylor_dict") and hasattr(self, '_expand_pos') and np.allclose(self._expand_pos,r,1e-10):
+		if self._expand_pos is not None and np.allclose(self._expand_pos,r,1e-10):
 			return
 
 		# Otherwise we need to gather the _taylor_dict for this NEW position
@@ -99,27 +150,26 @@ Methods:
 		self._taylor_dict['x'], self._taylor_dict['y'], self._taylor_dict['z'] = self.grad(r)
 		# second derivatives
 		hessian = self.hessian(r)
-		if Electrode.multipole_convention=="Da":
+		if multipole_convention=="Da":
 			self._taylor_dict['x^2'] = 0.25*hessian[0,0]
 			self._taylor_dict['y^2'] = 0.25*hessian[1,1]
 			self._taylor_dict['z^2'] = 0.25*hessian[2,2]
 			self._taylor_dict['xy'] = 0.25*hessian[0,1]
 			self._taylor_dict['xz'] = 0.25*hessian[0,2]
 			self._taylor_dict['zy'] = 0.25*hessian[1,2]
-		elif Electrode.multipole_convention=="Littich":
+		elif multipole_convention=="Littich":
 			self._taylor_dict['x^2'] = 0.5*hessian[0,0]
 			self._taylor_dict['y^2'] = 0.5*hessian[1,1]
 			self._taylor_dict['z^2'] = 0.5*hessian[2,2]
 			self._taylor_dict['xy'] = hessian[0,1]
 			self._taylor_dict['xz'] = hessian[0,2]
 			self._taylor_dict['zy'] = hessian[1,2]
-
 		# # higher order stuff
 		# self._taylor_dict['z^3'], self._taylor_dict['xz^2'], self._taylor_dict['yz^2'] = self.third_order_derivatives(r)
 		# self._taylor_dict['z^4'], self._taylor_dict['x^2z^2'], self._taylor_dict['y^2z^2'] = self.fourth_order_derivatives(r)
 
 	def get_multipole(self, multipole, r0=1):
-		if Electrode.multipole_convention=='Da':
+		if multipole_convention=='Da':
 			if multipole=='U1':
 				return 0.5*(r0**2)*(self._taylor_dict['x^2'] - self._taylor_dict['y^2'])
 			if multipole=='U2':
@@ -130,7 +180,7 @@ Methods:
 				return (r0**2)*self._taylor_dict['zy']
 			if multipole=='U5':
 				return (r0**2)*self._taylor_dict['xz']
-		elif Electrode.multipole_convention=='Littich':
+		elif multipole_convention=='Littich':
 			if multipole=='U1':
 				return (r0**2)*(self._taylor_dict['x^2'] - self._taylor_dict['y^2'])
 			if multipole=='U2':
@@ -153,64 +203,12 @@ Methods:
 		if multipole=='C':
 			return self._taylor_dict['C']
 
-	def expand_in_multipoles(self, r, controlled_multipoles=['C','Ex','Ey','Ez','U1','U2','U3','U4','U5'], r0=1):
-		"""
-		Obtain the multipole expansion for the potential due to the electrode at the observation point.
-		Note that U1,U2 have a 2x functional form compared to U3,U4,U5 to equalize curvature
-		"""
-		# first, make sure taylor expansion at position r is done
-		self.expand_potential(r)
-
-		for cm in controlled_multipoles:
-			if not cm in self.multipole_dict.keys():
-				self.multipole_dict[cm] = self.get_multipole(cm, r0)
-		
-		# # stuff that isn't really multipoles
-
-		# self.multipole_dict['z^2'] = (r0)**2*2*self._taylor_dict['z^2']
-
-		# self.multipole_dict['z^4'] = (r0)**4*self._taylor_dict['z^4']/24.
-		# self.multipole_dict['xz^2'] = (r0)**3 * self._taylor_dict['xz^2']
-		# self.multipole_dict['yz^2'] = (r0)**3 * self._taylor_dict['yz^2']
-
-		# #These terms give corrections to (radial frequency)**2 along the z axis:
-		# self.multipole_dict['x^2z^2']  =  (r0)**4 * self._taylor_dict['x^2z^2']
-		# self.multipole_dict['y^2z^2']  =  (r0)**4 * self._taylor_dict['y^2z^2']
-
-	def get_expand_pos(self):
-		return self._expand_pos
-
-	def extend(self, new_elecs=None, klass=None, **kwargs):
-		if new_elecs is not None:
-			for new_elec in new_elecs:
-				self._sub_electrodes.append(new_elec)
-			return
-		if klass is None:
-			print("Nothing to extend")
-			return
-		self._sub_electrodes.append(klass(**kwargs))
-
-	def get_region_bounds(self):
-		lbs = []
-		ubs = []
-		for elec in [self._e]+self._sub_electrodes:
-			if hasattr(elec, "gvec"):
-				lbs.append([elec.gvec[l][:2].mean() for l in range(3)])
-				ubs.append([elec.gvec[l][-2:].mean() for l in range(3)])
-		if len(lbs) > 0:
-			lbs = np.max(np.asarray(lbs),0)
-			ubs = np.min(np.asarray(ubs),0)
-			return lbs, ubs
-
-	def get_baseE(self):
-		return [self._e] + self._sub_electrodes
-
-class RRPESElectrode:
+class RRPESElectrode(Base):
 	"""
-RRPESElectrode: Rectangular Region Poisson Equation Solved Electrode
+RRPESElectrode(Base): Rectangular Region Poisson Equation Solved Electrode
 
 Attributes:
-	lap_tol		:: [COMMON in this class] the Laplacian-tolerance Unit [V]/[L]^2, [L] is the length unit
+	lap_tol		:: the Laplacian-tolerance Unit [V]/[L]^2, [L] is the length unit
 	gvec		:: grid vectors
 	_data 		:: gridded potential data of this electrode
 	_grad_data	:: gridded potential gradient data
@@ -228,7 +226,7 @@ Methods
 	lap_tol = 0.1
 	# Tolerance in nonzero laplacian. Unit [V]/[L]^2, [L] is the length unit of this electrode
 	def __init__(self, gvec, pot_data, grad_data=None, hess_data=None):
-		self.gvec = gvec
+		self._gvec = gvec
 		self._data = pot_data
 		if grad_data is not None:
 			self._grad_data = grad_data.reshape((3,)+pot_data.shape)
@@ -244,29 +242,11 @@ Methods
 					except:
 						self._hess_data[(i,j)] = hess_data[axes_nm[j]+ai].reshape(pot_data.shape)
 
-	def finer_grid(self, strides):
-		"""
-		To be deprecated due to low speed compared to matlab
-		Future dev. with 3D spline implemented in scipy.interpolate should intergrate the functions in interp_diff.m here
-		"""
-		strides = np.asarray(strides)
-		incres = np.asarray([w[1]-w[0] for w in self.gvec])
-		n_seg  = np.round(incres/strides)
-		print(n_seg,end='\t')
-		strides = strides/n_seg
-		for l in range(3):
-			self._data = np.transpose(self._data,[1,2,0])
-			if n_seg[l] > 1:
-				li = self.gvec[l]
-				new_li = np.linspace(li[0],li[-1],n_seg[l]*(li.size-1)+1)
-				self._data = np.asarray([[Akima1DInterpolator(self.gvec[l],line)(new_li) for line in mat] for mat in self._data])
-				self.gvec[l] = new_li
-
 	def finite_diff(self):
 		"""
 		Directly apply Finite central difference method to obtain the gradients and the hessian from gridded potential
 		"""
-		strides = np.asarray([w[1]-w[0] for w in self.gvec])
+		strides = np.asarray([w[1]-w[0] for w in self._gvec])
 		self._grad_data = np.gradient(self._data, *strides)
 		print("gradient grids generated",end='\t')
 		hess_data = np.empty((3,3)+self._data.shape, dtype='d')
@@ -310,14 +290,11 @@ Methods
 		Future dev: Should either 3D Akima or 3D spline be developed, replace the RegularGridInterpolator method here
 		"""
 		# bounds_error=False, fill_value=None enables extrapolation
-		self._interpolant = RegularGridInterpolator(self.gvec, self._data, method='linear', bounds_error=False, fill_value=None)
-		self._grad_interpolants = [RegularGridInterpolator(self.gvec, g, method='linear', bounds_error=False, fill_value=None) for g in self._grad_data]
+		self._interpolant = RegularGridInterpolator(self._gvec, self._data, method='linear', bounds_error=False, fill_value=None)
+		self._grad_interpolants = [RegularGridInterpolator(self._gvec, g, method='linear', bounds_error=False, fill_value=None) for g in self._grad_data]
 		self._hess_interpolants = {}
 		for k in self._hess_data.keys():
-			self._hess_interpolants[k] = RegularGridInterpolator(self.gvec, self._hess_data[k], method='linear', bounds_error=False, fill_value=None)
-
-	# def output_data(self):
-	# 	return self._data #, 'grad':self._grad_data, 'hessian':self._hess_data}
+			self._hess_interpolants[k] = RegularGridInterpolator(self._gvec, self._hess_data[k], method='linear', bounds_error=False, fill_value=None)
 
 	def pot(self, pos):
 		return self._interpolant(pos)
@@ -339,12 +316,99 @@ Methods
 	def hessdiag(self, pos):
 		return np.asarray([self._hess_interpolants[(l,l)](pos) for l in range(3)]).ravel()
 
-	def output_hessdata(self):
-		return self._hess_data
+	def bounds(self):
+		return np.arange([self._gvec[l][[0,-1]] for l in range(3)])
 
-class RectElectrode:
+class RRPESElectrodeSH(Base):
 	"""
-RectElectrode: Rectangular-shaped Electrode
+RRPESElectrodeSH(Base): Rectangular Region Poisson Equation Solved Electrode which exploits Spherical Harmonics (SH) expansion
+attributes:
+	grid_n: each time when we expand the potential in SH, we use a (n_grid, n_grid, n_grid) grid in the vicinity of the interested point
+	order: the order of SH expansion, i.e. in total there're (order+1)**2 terms in the expansion
+	resid_dict: a dictionary recording the rms-residue in the SH expansion
+	"""
+	grid_n = 4
+	def __init__(self, gvec, pot_data, order=3):
+		self._gvec = gvec
+		self._data = pot_data
+		self.order = order
+		self.resid_dict = {}
+		if (order+1)**2 >= self.grid_n**3:
+			self.grid_n = np.ceil(((order+1)**2+1)**(1/3.))
+
+		gsize = [gi.size for gi in gvec]
+		if self.grid_n > min(gsize):
+			raise ValueError("SH expansion order too high. (order+1)^2=%d < %d^3, while the number of samples on the axes are"%((order+1)**2, self.grid_n), gsize)
+
+	def expand_potential(self, r):
+		if self._expand_pos is None or not np.allclose(self._expand_pos,r,1e-10):
+			self._expand_pos = r
+			s = [segNeighbor(self._gvec[l], r[l], self.grid_n) for l in range(3)]
+			xri, yri, zri = [self._gvec[l][s[l]]-r[l] for l in range(3)]
+			self.__fit, res = gridSHexp(self._data[s[0],s[1],s[2]], xri, yri, zri, self.order)
+			self.resid_dict[tuple(r)] = res
+		return self.__fit
+
+	def get_multipole(self, multipole, r0=1):
+		if multipole_convention=='Da':
+			if multipole=='U1':
+				return .25*(r0**2)*(6*self.__fit[7])
+			if multipole=='U2':
+				return .75*(r0**2)*(self.__fit[4])
+			if multipole=='U3':
+				return (r0**2)*12*self.__fit[8]/8
+			if multipole=='U4':
+				return (r0**2)*(-6*self.__fit[6])/8
+			if multipole=='U5':
+				return (r0**2)*(-6*self.__fit[5])/8
+		elif multipole_convention=='Littich':
+			if multipole=='U1':
+				return (r0**2)*(6*self.__fit[7])
+			if multipole=='U2':
+				return (r0**2)*(self.__fit[4])
+			if multipole=='U3':
+				return (r0**2)*12*self.__fit[8]
+			if multipole=='U4':
+				return (r0**2)*(-6*self.__fit[6])
+			if multipole=='U5':
+				return (r0**2)*(-6*self.__fit[5])
+		# fields
+		if multipole=='Ex':
+			return r0*self.__fit[2]
+		if multipole=='Ey':
+			return r0*self.__fit[3]
+		if multipole=='Ez':
+			return -r0*self.__fit[1]
+		if multipole=='C':
+			return self.__fit[0]
+
+	def pot(self, pos):
+		self.expand_potential(pos)
+		return self.__fit[0]
+
+	def grad(self, pos):
+		self.expand_potential(pos)
+		return np.array([-self.__fit[2], -self.__fit[3], self.__fit[1]])
+
+	def hessian(self, pos):
+		self.expand_potential(pos)
+		quad = np.array([6*self.__fit[7], self.__fit[4], 12*self.__fit[8], -6*self.__fit[6], -6*self.__fit[5]])
+		return quadru2hess(quad)
+
+	def hessdiag(self, pos):
+		self.expand_potential(pos)
+		quad = np.array([6*self.__fit[7], self.__fit[4]])
+		return np.array([quad[0]-quad[1], -quad[0]-quad[1], 2*quad[1]])
+
+	def bounds(self):
+		return np.arange([self._gvec[l][[0,-1]] for l in range(3)])
+
+
+class RectElectrode(Base):
+	"""
+RectElectrode(Base): Rectangular-shaped Electrode
+
+Stems from previous gapless class:Electrode
 
 About Axis:
 	Since it will be wrapped in class:Electrode, the third component of input coordinates must be the axial one
@@ -376,7 +440,6 @@ Constructing Parameters:
 		'''
 		x, y, z = r
 		solid_angle = self.derivatives['phi0'](self.x1, self.x2, self.y1, self.y2, x, y, z) / (2*np.pi)
-
 		return solid_angle
 
 	def grad(self, r):
@@ -393,7 +456,6 @@ Constructing Parameters:
 		'''
 		Hessian matrix at the observation point
 		'''
-
 		x, y, z = r
 		hessian = np.zeros((3,3))
 		
@@ -424,3 +486,9 @@ Constructing Parameters:
 		fourth_derivatives = np.array([self.derivatives[key](self.x1, self.x2, self.y1, self.y2, x, y, z)
 						 for key in keys]) / (2*np.pi)
 		return fourth_derivatives
+
+if __name__ == '__main__':
+	sq1 = RectElectrode([(0,1),(0,1)],None)
+	sq2 = RectElectrode([(0,1),(0,2)],None)
+	elec1 = Electrode(sq1,1)
+	elec2 = Electrode(sq2,-1)

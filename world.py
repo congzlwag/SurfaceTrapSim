@@ -5,9 +5,11 @@ from scipy.optimize import minimize, minimize_scalar
 from scipy.linalg import eigh, inv, norm
 from scipy.constants import e as qe # Charge of electron in Coulomb
 from matplotlib import pyplot as plt
-from tqdm import tqdm
 
 from .SH import funcSHexp
+from .utils import quadru2hess, intersectBounds
+
+amu = 1.66054e-27
 
 class World:
 	'''
@@ -29,7 +31,6 @@ Attributes:
 
 Methods:
 	'''
-	amu = 1.66054e-27    # Atomic Mass Unit in kg
 	def __init__(self, ionA, omega_rf, scale=1):
 		"""
 __init__(self, ionA, omega_rf, scale=1):
@@ -37,14 +38,14 @@ __init__(self, ionA, omega_rf, scale=1):
 	omega_rf: 	the RF ANGULAR frequency
 	scale	: 	the typical length in meter. Length unit in the code is self.__scale meter(s)
 		"""
-		self.electrode_dict = {}
-		self.rf_electrode_list = []
-		self.dc_electrode_list = []
 		self.omega_rf = omega_rf
-		self.m = ionA * World.amu
+		self.m = ionA * amu
 		self.__scale = scale
 		self._pseudopot_factor = qe**2/(4*self.m*(omega_rf**2))/(scale**2)
 		self.bounds = None # if no boundary, then None
+		self.electrode_dict = {}
+		self.rf_electrode_list = []
+		self.dc_electrode_list = []
 
 	def add_electrode(self, e, name, kind, volt):
 		"""
@@ -88,28 +89,15 @@ __init__(self, ionA, omega_rf, scale=1):
 		return E
 
 	def check_bound(self):
-		if self.bounds is None:
-			boundless = True
-			lbs = []
-			ubs = []
-		else:
-			boundless = False
-			lbs = [list(self.bounds[:,0])]
-			ubs = [list(self.bounds[:,1])]
-		for nm, elec in self.dc_electrode_list+self.rf_electrode_list:
-			bds = elec.get_region_bounds()
-			if bds is not None:
-				boundless = False
-				lbs.append(bds[0])
-				ubs.append(bds[1])
-		if not boundless:
-			lbs = np.max(np.asarray(lbs),0)
-			ubs = np.min(np.asarray(ubs),0)
-			self.bounds = np.asarray([lbs,ubs]).T
-		else:
-			self.bounds = None
+		self.bounds = intersectBounds([typ_elec[1].get_region_bounds() for typ_elec in self.electrode_dict.values()])
 
 	def compute_rf_null(self, z, xy0=(0,0), onyz=False, bounds=None):
+		"""
+Search the RF null on a certain axial position
+xy0: initial guess
+onyz: whether restrict y=y0 or not
+bounds: array([[xmin, xmax],[ymin, ymax], ...]) shaped (2,2) or (3,2)
+		"""
 		if bounds is None:
 			self.check_bound()
 			if self.bounds is None:
@@ -279,7 +267,7 @@ return: The matrix, shaped (len(self.dc_electrodes), n_mult), controls DC voltag
 		assert A.ndim==2 and cost_P.ndim==2
 
 		PAt = np.dot(cost_P,A.T)
-		kernel = inv(np.dot(A,PAt)) # maps a multipole set-up to the half of the Lagrange multipliers
+		kernel = inv(np.dot(A,PAt)) 		  # maps a multipole set-up to the half of the Lagrange multipliers
 		voltage_arr = np.dot(PAt,kernel)      # maps a multipole set-up to the optimized voltage set-up
 		
 		if not alle: #padding
@@ -294,20 +282,14 @@ return: The matrix, shaped (len(self.dc_electrodes), n_mult), controls DC voltag
 		for i, nm_e in enumerate(elist):
 			nm_e[1].volt = voltages[i]
 
-	def fit_field_hess(self, pos, h_grid, n_grid=5, order=2):
+	def fit_grad_hess(self, pos, h_grid, n_grid=5, order=3):
 		if n_grid%2==0:
 			n_grid += 1
 		gi = h_grid*(np.arange(n_grid) - n_grid//2)
-		f, res = funcSHexp(self.compute_full_potential, pos, pos[0]+gi, pos[1]+gi, pos[2]+gi, 3)
+		f, res = funcSHexp(self.compute_full_potential, pos, pos[0]+gi, pos[1]+gi, pos[2]+gi, order)
 		print(res)
 		pot = f[0]
-		efield = np.array([f[2],f[3],-f[1]])
+		grad = np.array([-f[2],-f[3],f[1]])
 		quad = np.array([6*f[7], f[4], 12*f[8], -6*f[6], -6*f[5]])
-		hess = np.empty((3,3),'d')
-		hess[0,0] = quad[0]-quad[1]
-		hess[1,1] = -quad[0]-quad[1]
-		hess[2,2] = 2*quad[1]
-		hess[0,1] = hess[1,0] = 0.5*quad[2]
-		hess[0,2] = hess[2,0] = 0.5*quad[4]
-		hess[1,2] = hess[2,1] = 0.5*quad[3]
-		return pot, efield, hess
+		# print(quad) 
+		return pot, grad, quadru2hess(quad)

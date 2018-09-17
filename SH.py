@@ -6,6 +6,11 @@ from scipy.special import lpmn
 from scipy.linalg import lstsq
 
 def gridSHexp(V, xri,yri,zri, order):
+	"""
+V:				gridded values
+xri, yri, zri:	relative grid vectors
+order:			max l in the spherical harmonic expansion
+	"""
 	assert xri.ndim==1 and yri.ndim==1 and zri.ndim==1
 	n_samp = xri.size*yri.size*zri.size
 	assert n_samp >= (order+1)**2
@@ -69,6 +74,14 @@ def funcSHexp(func, rc, xi, yi, zi, order):
 	return gridSHexp(W, xi-rc[0], yi-rc[1], zi-rc[2], order)
 
 if __name__ == '__main__':
-	xi = yi = zi = np.arange(-5,9.0)
-	print(funcSHexp(lambda r: r[0]-3*r[2]*r[0], [0,0,0], xi,yi,zi, 3))
-	# print(funcSHexp(lambda r: r[1], [0,0,0], xi,yi,zi, 1))
+	gi = np.arange(-2,3)
+	f,r = funcSHexp(lambda r: -0.5*r[1]**2+0.5*r[0]**2, [0,0,0], gi,gi,gi,3)
+	print("U1",f)
+	f,r = funcSHexp(lambda r: r[2]**2-0.5*r[1]**2-0.5*r[0]**2, [0,0,0], gi,gi,gi,3)
+	print("U2",f)
+	f,r = funcSHexp(lambda r: 0.5*r[1]*r[0], [0,0,0], gi,gi,gi,3)
+	print("U3",f)
+	f,r = funcSHexp(lambda r: 0.5*r[2]*r[1], [0,0,0], gi,gi,gi,3)
+	print("U4",f)
+	f,r = funcSHexp(lambda r: 0.5*r[2]*r[0], [0,0,0], gi,gi,gi,3)
+	print("U5",f)

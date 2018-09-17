@@ -1,7 +1,7 @@
 from matplotlib import pyplot as plt
 import numpy as np
 
-__all__ = ['voltProfile', '']
+__all__ = ['voltProfile', 'plot2D', 'quadru2hess', 'intersectBounds', 'segNeighbor']
 
 def voltProfileSinglet(voltage, title, ax=None):
     if ax is None:
@@ -44,3 +44,47 @@ def plot2D(func, xr, yr, ax=None):
     ax.set_yticklabels(["%.3f"%x for x in yr[::10]])
     plt.colorbar(im)
     return ax # You can customize the axis afterwards as you wish
+
+def quadru2hess(quad):
+    hess = np.empty((3,3),'d')
+    hess[0,0] = quad[0]-quad[1]
+    hess[1,1] = -quad[0]-quad[1]
+    hess[2,2] = 2*quad[1]
+    hess[0,1] = hess[1,0] = 0.5*quad[2]
+    hess[0,2] = hess[2,0] = 0.5*quad[4]
+    hess[1,2] = hess[2,1] = 0.5*quad[3]
+    return hess
+
+def intersectBounds(bounds):
+    lbs = []
+    ubs = []
+    for bd in bounds:
+        if bd is not None:
+            lbs.append([bd[l,0] for l in range(3)])
+            ubs.append([bd[l,-1] for l in range(3)])
+    if len(lbs) > 0:
+        lbs = np.max(np.asarray(lbs),0)
+        ubs = np.min(np.asarray(ubs),0)
+        return np.array([lbs, ubs]).T
+
+def segNeighbor(arr, x, n):
+    """
+Prequisites:
+    arr is an ascending 1D numpy array
+    n <= arr.size
+    """
+    i = np.arange(arr.size)[arr<x][-1]
+    if n%2 == 0:
+        a = i - (n//2) + 1
+        b = i + (n//2) + 1
+    else:
+        a = i - (n//2)
+        b = i + (n//2) + 1
+        if x-arr[i] > arr[i+1]-x:
+            a = i - (n//2) + 1
+            b = i + (n//2) + 2
+    if a < 0:
+        return np.s_[:b-a]
+    if b > arr.size:
+        return np.s_[a-b+arr.size:]
+    return np.s_[a:b]
