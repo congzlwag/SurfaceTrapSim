@@ -13,7 +13,11 @@ amu = 1.66054e-27
 
 class World:
 	'''
-A General, Brand New World in SI-Unit
+A General, Brand New World
+Units:
+	(potential) energy: eV
+	length: __scale
+	frequency: Hz
 
 Axis convention in consistance with <class Electrode>
 	z: axial
@@ -41,7 +45,7 @@ __init__(self, ionA, omega_rf, scale=1):
 		self.omega_rf = omega_rf
 		self.m = ionA * amu
 		self.__scale = scale
-		self._pseudopot_factor = qe**2/(4*self.m*(omega_rf**2))/(scale**2)
+		self._pseudopot_factor = qe/(4*self.m*(omega_rf**2))/(scale**2)
 		self.bounds = None # if no boundary, then None
 		self.electrode_dict = {}
 		self.rf_electrode_list = []
@@ -133,11 +137,11 @@ bounds: array([[xmin, xmax],[ymin, ymax], ...]) shaped (2,2) or (3,2)
 			if xym.success:
 				return np.array([xym.x[0],xym.x[1],z])
 			else:
-				print("Optimization Failure", xym.message, '. Returning initial value')
+				print("Optimization Failure:", xym.message, '. Returning initial value')
 				return np.array([xy0[0],xy0[1],z])
 
 	def compute_pseudopot(self, r):
-		"""pseudopotential in Joule"""
+		"""pseudopotential in eV"""
 		return self._pseudopot_factor*sum(self.compute_rf_field(r)**2)
 
 	def compute_pseudopot_hessian_atNULL(self, r):
@@ -177,6 +181,7 @@ bounds: array([[xmin, xmax],[ymin, ymax], ...]) shaped (2,2) or (3,2)
 		return np.sqrt(qe*abs(hessdiag)/self.m)/(2*np.pi), eigvec, hessdiag>0
 
 	def compute_full_potential(self, r):
+		# Full potential in eV
 		return self.compute_pseudopot(r) + self.compute_dc_potential(r)
 
 	# def compute_full_potential_frequencies(self, r):
