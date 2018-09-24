@@ -1,4 +1,5 @@
 from matplotlib import pyplot as plt
+from matplotlib import cm
 import numpy as np
 
 __all__ = ['voltProfile', 'plot2D', 'quadru2hess', 'intersectBounds', 'segNeighbor']
@@ -88,3 +89,34 @@ Prequisites:
     if b > arr.size:
         return np.s_[a-b+arr.size:]
     return np.s_[a:b]
+
+def drawTrap(electrode_dict):
+    fig, ax = plt.subplots() # initialize figure
+    fig.canvas.draw()
+    colors = []
+    cmap = cm.get_cmap('jet')
+    elec_colors = cmap(np.linspace(1,0,len(electrode_dict)))
+    drawLines = []
+    for i, key in enumerate(electrode_dict):
+        myElecs = electrode_dict[key][1].get_baseE()
+        mycolor = elec_colors[i]
+        # add all subelectrodes to drawLines
+        for subelec in myElecs:
+            drawLines.append([subelec.x1,subelec.x2])
+            drawLines.append([subelec.y2,subelec.y2])
+            colors.append(mycolor)
+            drawLines.append([subelec.x1,subelec.x2])
+            drawLines.append([subelec.y1,subelec.y1])
+            colors.append(mycolor)
+            drawLines.append([subelec.x1,subelec.x1])
+            drawLines.append([subelec.y1,subelec.y2])
+            colors.append(mycolor)
+            drawLines.append([subelec.x2,subelec.x2])
+            drawLines.append([subelec.y1,subelec.y2])
+            colors.append(mycolor)
+    plt.gca().set_prop_cycle(color=colors)
+    drawLines = np.array(drawLines)*1e6
+    ax.plot(*drawLines)
+    plt.xlabel('x (microns)')
+    plt.ylabel('y (microns)')
+    plt.show()
