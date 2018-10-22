@@ -8,7 +8,7 @@ from scipy.linalg import lstsq
 
 def gridSHexp(V, xri,yri,zri, order):
 	"""
-V:				gridded values
+V:			gridded values
 xri, yri, zri:	relative grid vectors
 order:			max l in the spherical harmonic expansion
 	"""
