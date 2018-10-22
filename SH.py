@@ -1,6 +1,7 @@
 from __future__ import print_function
 __all__ = ['gridSHexp', 'funcSHexp']
 
+
 import numpy as np
 from scipy.special import lpmn
 from scipy.linalg import lstsq
